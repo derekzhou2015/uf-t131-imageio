@@ -7,6 +7,7 @@ from zipfile import ZipFile
 import numpy as np
 
 import pytest
+from PIL import Image
 
 import imageio
 from imageio import core
@@ -404,6 +405,56 @@ def test_animated_gif(test_images, tmp_path):
     # Meta (dummy, because always {})
     imageio.mimsave(fname, [x[:, :, 0] for x in ims], duration=0.2, format="GIF-PIL")
     assert isinstance(imageio.read(fname).get_meta_data(), dict)
+
+
+def _gif_color_table_entries(header):
+    """Number of entries in the global color table declared by a GIF header."""
+    assert header[:3] == b"GIF"
+    packed = header[10]
+    # bit 7: global color table flag; bits 0-2: table size exponent
+    assert packed & 0x80
+    return 1 << ((packed & 0x07) + 1)
+
+
+def test_gif_palette_header_matches_payload(tmp_path):
+    """Regression test for GIF-PIL files whose palette table is truncated.
+
+    The legacy GIF-PIL writer hard-codes a 256-entry color table in the
+    headers it assembles by hand, but takes the palette bytes from Pillow's
+    ``getheader``. Pillow 13 returns a palette trimmed to the colors used by
+    the frame, so the header advertised 768 bytes while fewer were written;
+    every following block was then read at the wrong offset and both Pillow
+    and imageio rejected the file as corrupt.
+    """
+    frames = []
+    base = np.zeros((40, 32, 3), np.uint8)
+    for i in range(5):
+        frame = base.copy()
+        frame[:16, :, 0] = 100 + i * 30
+        frames.append(frame)
+
+    filename = tmp_path / "test.gif"
+    imageio.mimsave(filename, frames, duration=0.1, format="GIF-PIL")
+    raw = filename.read_bytes()
+
+    # 1) the color table declared in the header is actually present, and the
+    #    first block after it is the expected extension/image separator.
+    table_bytes = 3 * _gif_color_table_entries(raw)
+    # header (6) + logical screen descriptor (7) precede the color table
+    assert len(raw) >= 13 + table_bytes
+    assert raw[13 + table_bytes] in (0x21, 0x2C, 0x3B)
+
+    # 2) Pillow can decode every frame
+    with Image.open(filename) as gif:
+        assert gif.n_frames == len(frames)
+        for index in range(gif.n_frames):
+            gif.seek(index)
+            gif.load()
+
+    # 3) imageio itself can read the file back
+    roundtrip = imageio.mimread(filename, format="GIF-PIL")
+    assert len(roundtrip) == len(frames)
+    np.testing.assert_array_equal(roundtrip[0][..., :3], frames[0])
 
 
 def test_v3_gif(test_images):

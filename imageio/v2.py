@@ -173,6 +173,23 @@ class LegacyReader:
         return self.get_length()
 
 
+def _v2_write_defaults(plugin_instance: PluginV3, kwargs: dict) -> dict:
+    """Apply v2 defaults that the v3 plugins do not (need to) know about."""
+    if (
+        type(plugin_instance).__name__ == "PillowPlugin"
+        and plugin_instance.request.extension == ".gif"
+    ):
+        # The v2 API has historically written animated GIFs that loop
+        # forever (the legacy GIF-PIL writer defaults to ``loop=0``).
+        # The v3 pillow plugin does not set a default and Pillow then
+        # omits the NETSCAPE loop extension, so readers stop on the last
+        # frame. Restore the v2 default here, in the v2 compatibility
+        # layer, so that ``imageio.v3`` keeps its own (documented) behavior.
+        kwargs.setdefault("loop", 0)
+
+    return kwargs
+
+
 class LegacyWriter:
     def __init__(self, plugin_instance: PluginV3, **kwargs):
         self.instance = plugin_instance
@@ -183,7 +200,7 @@ class LegacyWriter:
             kwargs["mode"] = kwargs["pilmode"]
             del kwargs["pilmode"]
 
-        self.write_args = kwargs
+        self.write_args = _v2_write_defaults(self.instance, kwargs)
 
     def close(self):
         if not self.closed:
@@ -394,7 +411,7 @@ def imwrite(uri, im, format=None, **kwargs):
     imopen_args = decypher_format_arg(format)
     imopen_args["legacy_mode"] = True
     with imopen(uri, "wi", **imopen_args) as file:
-        return file.write(im, **kwargs)
+        return file.write(im, **_v2_write_defaults(file, kwargs))
 
 
 # Multiple images
@@ -492,7 +509,7 @@ def mimwrite(uri, ims, format=None, **kwargs):
     imopen_args = decypher_format_arg(format)
     imopen_args["legacy_mode"] = True
     with imopen(uri, "wI", **imopen_args) as file:
-        return file.write(ims, is_batch=True, **kwargs)
+        return file.write(ims, is_batch=True, **_v2_write_defaults(file, kwargs))
 
 
 # Volumes

@@ -1,6 +1,7 @@
 import pytest
 import imageio.v2 as iio
 import numpy as np
+from PIL import Image
 
 
 def test_reader(test_images):
@@ -86,3 +87,39 @@ def test_kwarg_forwarding(tmp_path):
         assert img.shape == (100, 100)
         assert img.meta["duration"] == 1000
         assert img.meta["loop"] == 0
+
+
+def _animation_frames():
+    base = np.zeros((40, 32, 3), np.uint8)
+    frames = []
+    for i in range(5):
+        frame = base.copy()
+        frame[:16, :, 0] = 100 + i * 30
+        frames.append(frame)
+    return frames
+
+
+def test_gif_loops_by_default(tmp_path):
+    """Regression test: animated GIFs written through the v2 API must loop.
+
+    The v2 (and the legacy GIF-PIL) writer default is ``loop=0``, i.e. loop
+    forever. The v3 pillow plugin that backs the default v2 path leaves
+    ``loop`` unset, and Pillow then omits the NETSCAPE loop extension, so
+    players stop after the last frame.
+    """
+    filename = tmp_path / "default.gif"
+    iio.mimwrite(filename, _animation_frames(), duration=100)
+
+    # the loop extension is present in the file itself ...
+    assert bytes((0x21, 0xFF, 0x0B)) + b"NETSCAPE2.0" in filename.read_bytes()
+
+    # ... and PIL reports it as an infinite loop
+    with Image.open(filename) as gif:
+        assert gif.n_frames == 5
+        assert gif.info["loop"] == 0
+
+    # an explicit value still wins
+    filename_loop2 = tmp_path / "loop2.gif"
+    iio.mimwrite(filename_loop2, _animation_frames(), duration=100, loop=2)
+    with Image.open(filename_loop2) as gif:
+        assert gif.info["loop"] == 2

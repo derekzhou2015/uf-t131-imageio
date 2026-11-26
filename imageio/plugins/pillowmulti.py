@@ -12,6 +12,30 @@ logger = logging.getLogger(__name__)
 
 NeuQuant = None  # we can implement this when we need it
 
+#: Number of colors in the GIF color tables advertised by :class:`GifWriter`.
+#: Both the logical screen descriptor (``getheaderAnim``) and the image
+#: descriptor (``getImageDescriptor``) hard-code the packed field ``0x87``,
+#: i.e. a 256-entry - 768 byte - color table.
+GIF_PALETTE_SIZE = 256
+
+
+def _pad_palette(palette, palette_size=GIF_PALETTE_SIZE):
+    """Pad a color table to the size advertised in the GIF header.
+
+    ``GifWriter`` writes the palette bytes it gets from Pillow's private
+    ``getheader`` helper, but hard-codes a 256-entry color table in the
+    headers it assembles. Older Pillow versions always returned a full
+    768-byte palette, so both agreed. Newer versions trim the returned
+    palette to the smallest power of two that fits the frame's colors,
+    which leaves the header declaring far more palette bytes than are
+    actually present and corrupts every following block. Pad the palette
+    back to the declared size so header and payload stay in sync.
+    """
+    expected = 3 * palette_size
+    if len(palette) < expected:
+        palette = palette + b"\x00" * (expected - len(palette))
+    return palette
+
 
 class TIFFFormat(PillowFormat):
     _modes = "i"  # arg, why bother; people should use the tiffile version
@@ -139,7 +163,9 @@ class GifWriter:  # pragma: no cover
         # as im_pil.palette.tobytes().
         from PIL.GifImagePlugin import getheader
 
-        palette = getheader(im_pil)[0][3]
+        # The headers we build below advertise a 256-entry color table, so the
+        # palette we write must have that exact size (see ``_pad_palette``).
+        palette = _pad_palette(getheader(im_pil)[0][3])
 
         # Write image
         if self._count == 0:
@@ -302,8 +328,9 @@ class GifWriter:  # pragma: no cover
         Y = np.argwhere(diff.sum(1))
         # Get rect coordinates
         if X.size and Y.size:
-            x0, x1 = int(X[0]), int(X[-1] + 1)
-            y0, y1 = int(Y[0]), int(Y[-1] + 1)
+            # ``argwhere`` returns one row per match, so index into the row.
+            x0, x1 = int(X[0, 0]), int(X[-1, 0] + 1)
+            y0, y1 = int(Y[0, 0]), int(Y[-1, 0] + 1)
         else:  # No change ... make it minimal
             x0, x1 = 0, 2
             y0, y1 = 0, 2
